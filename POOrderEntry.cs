@@ -9,7 +9,7 @@ using System.Collections.Generic;
 using System.Collections;
 
 using PX.Objects.SO;
-
+using PX.Objects.RQ;
 
 namespace PX.Objects.PO
 {
@@ -154,9 +154,21 @@ namespace PX.Objects.PO
 
         public virtual IEnumerable createPO(POOrder pOOrder, POLine pOLine)
         {
-            string modifyPRResult = modifyPOCostAlloc(pOOrder, pOLine);
+            RQRequisitionOrder rQRequisitionOrder = PXSelect<RQRequisitionOrder, 
+                Where<RQRequisitionOrder.orderNbr, Equal<Required<RQRequisitionOrder.orderNbr>>,
+                And<RQRequisitionOrder.orderCategory, Equal<RQOrderCategory.po>>>>.Select(Base, pOOrder.OrderNbr);
 
-            if (!modifyPRResult.Trim().Contains("OK")) return modifyPRResult.Trim();
+            RQRequisition rQRequisition = PXSelect<RQRequisition, Where<RQRequisition.reqNbr, Equal<Required<RQRequisitionOrder.reqNbr>>>>.Select(Base, rQRequisitionOrder.ReqNbr);
+            RQRequisitionExt rQRequisitionExt = rQRequisition.GetExtension<RQRequisitionExt>();
+
+            int purchaseMethod = rQRequisition != null ? rQRequisitionExt.UsrPurchMethod ?? 2 : 2;
+            string nonCoreDO = rQRequisition != null ? rQRequisitionExt.UsrDONbr != null ? rQRequisitionExt.UsrDONbr.Trim() : string.Empty : string.Empty;
+            string modifyPRResult = string.Empty;
+            if (purchaseMethod != 2)
+            {
+                modifyPRResult = modifyPOCostAlloc(pOOrder, pOLine, purchaseMethod, nonCoreDO);
+                if (!modifyPRResult.Trim().Contains("OK")) return modifyPRResult.Trim();
+            }
 
             PLNSC.ScreenService.OperationContext screenContext = new PLNSC.ScreenService.OperationContext()
             {
@@ -430,17 +442,25 @@ namespace PX.Objects.PO
             return null;
         }
 
-        string modifyPOCostAlloc(POOrder pOOrder, POLine pOLine)
+        string modifyPOCostAlloc(POOrder pOOrder, POLine pOLine, int purchaseMethod, string nonCoreDO)
         {
             string result = "";
             string projectNo = "";
 
-            SOLineSplit sOLineSplit = PXSelect<SOLineSplit, Where<SOLineSplit.pONbr, Equal<Required<SOLineSplit.pONbr>>>>.Select(Base, pOOrder.OrderNbr);
-
-            if (sOLineSplit != null)
+            if (purchaseMethod == 0)
             {
-                projectNo = sOLineSplit.OrderNbr.Trim();
+                SOLineSplit sOLineSplit = PXSelect<SOLineSplit, Where<SOLineSplit.pONbr, Equal<Required<SOLineSplit.pONbr>>>>.Select(Base, pOOrder.OrderNbr);
+
+                if (sOLineSplit != null)
+                {
+                    projectNo = sOLineSplit.OrderNbr.Trim();
+                }
             }
+            else
+            {
+                projectNo = nonCoreDO;
+            }
+           
 
             PLNSC.ScreenService.OperationContext screenContext = new PLNSC.ScreenService.OperationContext()
             {

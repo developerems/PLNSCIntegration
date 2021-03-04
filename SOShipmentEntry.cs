@@ -714,7 +714,16 @@ namespace PX.Objects.SO
 
                         if (errMess.Trim() != "")
                         {
-                            throw new PXException(errMess.Trim());
+                            string errorValue = string.Empty;
+                            ScreenNameValueDTO[] fieldsDetailError = new ScreenNameValueDTO[screenReply.screenFields.Length];
+                            for (int i = 0; i < screenReply.screenFields.Length; i++)
+                            {
+                                if (screenReply.screenFields[i].fieldName == screenReply.currentCursorFieldName)
+                                {
+                                    errorValue = screenReply.screenFields[i].value;
+                                }
+                            }
+                            throw new PXException($"{errMess.Trim()}-{screenReply.currentCursorFieldName}-{errorValue.Trim()}");
                         }
 
                         if (functionKey.Contains("XMIT-Confirm"))
