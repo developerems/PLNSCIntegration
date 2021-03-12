@@ -27,6 +27,40 @@ namespace PX.Objects.RQ
     public class RQRequisitionEntry_Extension : PXGraphExtension<RQRequisitionEntry>
     {
         public Boolean RequesRefresh = false;
+        public static string dbName = Data.Update.PXInstanceHelper.DatabaseName;
+        public string urlPrefix(string dbName)
+        {
+            string result = string.Empty;
+
+            if (dbName.Trim().Contains("DEV"))
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("TRN"))
+            {
+                result = "http://ews-elltrn.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("PRD"))
+            {
+                result = "http://ews-ellprd.ellipse.plnsc.co.id/ews/services/";
+            }
+            else
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+
+            return result;
+        }
+
+        int sessionTimeout = 3600000;
+        int maxInstance = 1;
+
+        public static string districtCode = "SC01";
+        public static string positionID = "INTPO";
+        public static string userName = "ADMIN";
+        public static string password = "P@ssw0rd";
+
+        string message = "";
 
         #region Requisition Handlers
 
@@ -308,6 +342,7 @@ namespace PX.Objects.RQ
                             line = graph.Transactions.Update(line);
 
                             qtExt.UsrIncoterm = reqExt.UsrIncoterm;
+                            qtExt.UsrPurchMethod = reqExt.UsrPurchMethod;
                             qtExt.UsrPreDoNbr = reqExt.UsrPreDoNbr;
                             qtExt.UsrPreDoDate = reqExt.UsrPreDoDate;
                             qtExt.UsrCuryInspectorCost = curyInspectorCost;
@@ -814,10 +849,9 @@ namespace PX.Objects.RQ
         protected virtual void RQRequisition_RowSelected(PXCache sender, PXRowSelectedEventArgs e)
         {
             RQRequisition row = (RQRequisition)e.Row;
+            if (row == null) return;
             RQRequisitionExt rowExt = row.GetExtension<RQRequisitionExt>();
-            if (row == null)
-                return;
-
+            
             bool rHold = row.Hold == true;
             bool custOrder = row.CustomerID != null;
             bool gaRequest = (row.CustomerID == null && rowExt.UsrPurchMethod == 2) || row.CustomerID != null;
@@ -1399,7 +1433,7 @@ namespace PX.Objects.RQ
 
                 try
                 {
-                    ClientConversation.authenticate("ADMIN", "");
+                    ClientConversation.authenticate(userName, password);
                 }
                 catch (Exception ex)
                 {
@@ -1412,7 +1446,8 @@ namespace PX.Objects.RQ
                     try
                     {
                         projectService.Timeout = 3600000;
-                        ClientConversation.authenticate("ADMIN", "");
+                        projectService.Url = $"{urlPrefix(dbName)}ScreenService";
+                        ClientConversation.authenticate(userName, password);
 
                         projectRequest.districtCode = "SC01";
                         projectRequest.projectNo = soOrder.OrderNbr;
@@ -1463,7 +1498,7 @@ namespace PX.Objects.RQ
                 {
                     try
                     {
-                        ClientConversation.authenticate("ADMIN", "");
+                        ClientConversation.authenticate(userName, password);
                     }
                     catch (Exception ex)
                     {
@@ -1475,10 +1510,11 @@ namespace PX.Objects.RQ
                     {
                         try
                         {
-                            ClientConversation.authenticate("ADMIN", "");
+                            ClientConversation.authenticate(userName, password);
                             ScreenService screenService = new ScreenService()
                             {
-                                Timeout = 3600000
+                                Timeout = sessionTimeout,
+                                Url = $"{urlPrefix(dbName)}ScreenService"
                             };
                             PLNSC.ScreenService.OperationContext screenOperationContext = new PLNSC.ScreenService.OperationContext()
                             {
@@ -1622,9 +1658,20 @@ namespace PX.Objects.RQ
 
                                         if (requisitionExt.UsrPurchMethod != 2)
                                         {
-                                            dONumber = PXSelect<SOOrder, Where<SOOrder.orderNbr, Equal<Required<SOOrder.orderNbr>>>>.Select(Base, requisitionExt.UsrDONbr);
-                                            int custId = dONumber.CustomerID ?? 0;
-                                            int custLocationId = dONumber.CustomerLocationID ?? 0;
+                                            int custId;
+                                            int custLocationId;
+
+                                            if (requisitionExt.UsrDONbr != null && requisitionExt.UsrDONbr != string.Empty)
+                                            {
+                                                dONumber = PXSelect<SOOrder, Where<SOOrder.orderNbr, Equal<Required<SOOrder.orderNbr>>>>.Select(Base, requisitionExt.UsrDONbr);
+                                                custId = dONumber.CustomerID ?? 0;
+                                                custLocationId = dONumber.CustomerLocationID ?? 0;
+                                            }
+                                            else
+                                            {
+                                                custId = requisition.CustomerID ?? 0;
+                                                custLocationId = requisition.CustomerLocationID ?? 0;
+                                            }
 
                                             BAccount2 customer = PXSelect<BAccount2,
                                                 Where<BAccount2.bAccountID, Equal<Required<BAccount2.bAccountID>>,

@@ -14,6 +14,39 @@ namespace PX.Objects.AP
 {
     public class VendorMaint_Extension : PXGraphExtension<VendorMaint>
     {
+        public static string dbName = Data.Update.PXInstanceHelper.DatabaseName;
+        public string urlPrefix(string dbName)
+        {
+            string result = string.Empty;
+
+            if (dbName.Trim().Contains("DEV"))
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("TRN"))
+            {
+                result = "http://ews-elltrn.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("PRD"))
+            {
+                result = "http://ews-ellprd.ellipse.plnsc.co.id/ews/services/";
+            }
+            else
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+
+            return result;
+        }
+
+        int sessionTimeout = 3600000;
+        int maxInstance = 1;
+
+        public static string districtCode = "SC01";
+        public static string positionID = "INTPO";
+        public static string userName = "ADMIN";
+        public static string password = "P@ssw0rd";
+
         [PXDBString(32, IsUnicode = true)]
         [PXDefault()]
         [PXUIField(DisplayName = "Vendor Name", Visibility = PXUIVisibility.SelectorVisible)]
@@ -89,8 +122,6 @@ namespace PX.Objects.AP
             {
                 AutoNumberAttribute.SetNumberingId<Vendor.acctCD>(cache, "FORWARDER");
             }
-            
-
         }
 
         protected void VendorR_RowPersisting(PXCache sender, PXRowPersistingEventArgs e)
@@ -128,12 +159,16 @@ namespace PX.Objects.AP
 
             try
             {
-                ClientConversation.authenticate("ADMIN", "");
-                ScreenService screenService = new ScreenService();
+                ClientConversation.authenticate(userName, password);
+                ScreenService screenService = new ScreenService()
+                {
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}ScreenService"
+                };
                 OperationContext screenContext = new OperationContext()
                 {
-                    district = "SC01",
-                    position = "INTPO",
+                    district = districtCode,
+                    position = positionID,
                     maxInstances = 1,
                     returnWarnings = false,
                     trace = false
@@ -229,10 +264,10 @@ namespace PX.Objects.AP
                         {
                             vendorCountry = vendorAddress.CountryID.Trim();
                             addressLine1 = vendorAddress.AddressLine1.Trim();
-                            addressLine2 = vendorAddress.AddressLine2 != null ? vendorAddress.AddressLine2.Trim() : " ";
-                            addressLine3 = vendorAddress.AddressLine3 != null ? vendorAddress.AddressLine3.Trim() : " ";
+                            addressLine2 = vendorAddress.AddressLine2 != null ? vendorAddress.AddressLine2.Trim() : string.Empty;
+                            addressLine3 = vendorAddress.AddressLine3 != null ? vendorAddress.AddressLine3.Trim() : string.Empty;
                             kota = vendorAddress != null ? vendorAddress.City : string.Empty;
-                            zipCode = vendorAddress.PostalCode;
+                            zipCode = vendorAddress.PostalCode != null ? vendorAddress.PostalCode.Trim() : string.Empty;
                         }
 
                         if (contact != null)

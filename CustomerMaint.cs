@@ -35,9 +35,42 @@ namespace PX.Objects.AR
 {
   public class CustomerMaint_Extension : PXGraphExtension<CustomerMaint>
   {
-    #region Event Handlers
-    
-    
+        public static string dbName = Data.Update.PXInstanceHelper.DatabaseName;
+        public string urlPrefix(string dbName)
+        {
+            string result = string.Empty;
+
+            if (dbName.Trim().Contains("DEV"))
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("TRN"))
+            {
+                result = "http://ews-elltrn.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("PRD"))
+            {
+                result = "http://ews-ellprd.ellipse.plnsc.co.id/ews/services/";
+            }
+            else
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+
+            return result;
+        }
+
+        int sessionTimeout = 3600000;
+        int maxInstance = 1;
+
+        public static string districtCode = "SC01";
+        public static string positionID = "INTPO";
+        public static string userName = "ADMIN";
+        public static string password = "P@ssw0rd";
+
+        #region Event Handlers
+
+
         [PXDBString(32, IsUnicode = true)]
         [PXDefault()]
         [PXUIField(DisplayName = "Customer Name", Visibility = PXUIVisibility.SelectorVisible)]
@@ -105,11 +138,7 @@ namespace PX.Objects.AR
         [PXUIField(DisplayName = "Curr. Rate Type ")]
         protected virtual void Customer_CuryRateTypeID_CacheAttached(PXCache cache) { }
 
-
-
         #endregion
-
-        #region Event Handlers
 
         protected void Customer_RowPersisting(PXCache sender, PXRowPersistingEventArgs e)
         {
@@ -133,7 +162,6 @@ namespace PX.Objects.AR
             }
             maintainCustomer(sender, row);
         }
-        #endregion
 
         public virtual IEnumerable maintainCustomer(PXCache cache, Customer customer)
         {
@@ -155,12 +183,16 @@ namespace PX.Objects.AR
 
             try
             {
-                ClientConversation.authenticate("ADMIN", "");
-                ScreenService screenService = new ScreenService();
+                ClientConversation.authenticate(userName, password);
+                ScreenService screenService = new ScreenService()
+                {
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}ScreenService"
+                };
                 PLNSC.ScreenService.OperationContext screenContext = new PLNSC.ScreenService.OperationContext()
                 {
-                    district = "SC01",
-                    position = "INTPO",
+                    district = districtCode,
+                    position = positionID,
                     maxInstances = 1,
                     returnWarnings = false,
                     trace = false
@@ -473,7 +505,5 @@ namespace PX.Objects.AR
             }
             return null;
         }
-
-       
     }
 }

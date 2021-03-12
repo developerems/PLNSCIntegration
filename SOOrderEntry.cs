@@ -20,6 +20,30 @@ namespace PX.Objects.SO
 {
     public class SOOrderEntry_Extension : PXGraphExtension<SOOrderEntry>
     {
+        public static string dbName = Data.Update.PXInstanceHelper.DatabaseName;
+        public string urlPrefix(string dbName)
+        {
+            string result = string.Empty;
+
+            if (dbName.Trim().Contains("DEV"))
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("TRN"))
+            {
+                result = "http://ews-elltrn.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("PRD"))
+            {
+                result = "http://ews-ellprd.ellipse.plnsc.co.id/ews/services/";
+            } else
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+
+            return result;
+        }
+
         int sessionTimeout = 3600000;
         int maxInstance = 1;
 
@@ -27,7 +51,7 @@ namespace PX.Objects.SO
         string positionID = "INTPO";
         string message = "";
         string userName = "ADMIN";
-        string password = "";
+        string password = "P@ssw0rd";
         
         bool loggedIn = false;
 
@@ -50,6 +74,44 @@ namespace PX.Objects.SO
                     createDO(sOOrder);
                 }
             }
+        }
+
+        protected virtual void SOOrder_RowSelected(PXCache sender, PXRowSelectedEventArgs e)
+        {
+            SOOrder row = (SOOrder)e.Row;
+            if (row == null) return;
+            SOOrderExt sOOrderExt = row.GetExtension<SOOrderExt>();
+
+            this.finalizeDO.SetEnabled(row.OrderType == SOOrderTypeConstants.SalesOrder && row.Status == SOOrderStatus.Completed && row.Hold == false && sOOrderExt.UsrFinalized == false);
+        }
+
+        public PXAction<SOOrder> finalizeDO;
+        [PXButton()]
+        [PXUIField(DisplayName = CustomMessage.finalizeEllipseProject, MapEnableRights = PXCacheRights.Select, MapViewRights = PXCacheRights.Select, Visible = true)]
+        protected virtual void FinalizeDO()
+        {
+            SOOrder row = Base.Document.Current;
+            SOOrderExt rowExt = PXCache<SOOrder>.GetExtension<SOOrderExt>(row);
+
+            string soNumber = row.OrderNbr;
+            string actualEffortResult = actualEffort(row.OrderNbr);
+            if (actualEffortResult != "OK")
+            {
+                throw new PXException(actualEffortResult);
+            }
+
+            string finalizeDOResult = finalizeEllipseProject(row.OrderNbr);
+            if (finalizeDOResult != "OK")
+            {
+                throw new PXException(finalizeDOResult);
+            }
+
+            Base.Document.Cache.SetValueExt<SOOrderExt.usrFinalized>(row, true);
+            Base.Document.Cache.Update(row);
+
+            //Base.Caches[typeof(SOOrder)].SetValueExt<SOOrderExt.usrFinalized>(row, true);
+            //Base.Caches[typeof(SOOrder)].Update(rowExt);
+            Base.Save.Press();
         }
 
         public virtual IEnumerable createDO(SOOrder sOOrder)
@@ -148,7 +210,8 @@ namespace PX.Objects.SO
                 ClientConversation.authenticate(userName, password);
                 TransactionService transactionService = new TransactionService()
                 {
-                    Timeout = sessionTimeout
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}TransactionService"
                 };
                 PLNSC.TransactionRef.OperationContext transContext = new PLNSC.TransactionRef.OperationContext()
                 {
@@ -228,12 +291,13 @@ namespace PX.Objects.SO
 
                     ProjectService projectService = new ProjectService()
                     {
-                        Timeout = sessionTimeout
+                        Timeout = sessionTimeout,
+                        Url = $"{urlPrefix(dbName)}ProjectService"
                     };
 
                     ProjectServiceCreateRequestDTO projectRequest = new ProjectServiceCreateRequestDTO()
                     {
-                        districtCode = "SC01",
+                        districtCode = districtCode,
                         projectNo = sOOrder.OrderNbr,
                         projDesc = sOOrder.OrderDesc,
                         originatorId = originatorId,
@@ -274,6 +338,160 @@ namespace PX.Objects.SO
             return result;
         }
 
+        string finalizeEllipseProject(string sONbr)
+        {
+            string result = string.Empty;
+            string transID = "";
+
+            try
+            {
+                ClientConversation.authenticate(userName, password);
+                TransactionService transactionService = new TransactionService()
+                {
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}TransactionService"
+                };
+                PLNSC.TransactionRef.OperationContext transContext = new PLNSC.TransactionRef.OperationContext()
+                {
+                    district = districtCode,
+                    position = positionID,
+                    maxInstances = maxInstance
+                };
+
+                transID = transactionService.begin(transContext);
+
+                ProjectService projectService = new ProjectService()
+                {
+                    Timeout = transactionService.Timeout,
+                    Url = $"{urlPrefix(dbName)}ProjectService"
+                };
+
+                PLNSC.ProjectService.OperationContext projectServiceContext = new PLNSC.ProjectService.OperationContext()
+                {
+                    district = transContext.district,
+                    position = transContext.position,
+                    maxInstances = transContext.maxInstances
+                };
+
+                //ProjectEstimateDTO[] projectEstimateDTOs = new ProjectEstimateDTO[1];
+                ProjectServiceFinaliseRequestDTO projectServiceFinaliseRequestDTO = new ProjectServiceFinaliseRequestDTO()
+                {
+                    districtCode = transContext.district,
+                    projectNo = sONbr.Trim(),
+                    finalCostInd = "Y"
+                };
+                ProjectServiceFinaliseReplyDTO projectServiceFinaliseReplyDTO = projectService.finalise(projectServiceContext, projectServiceFinaliseRequestDTO);
+                //ProjectEstimateServiceResult[] projectEstimateServiceResults = projectEstimateService.multipleUpdate(projectEstimateOperationContext, projectEstimateDTOs);
+
+                //ProjectEstimateServiceResult projectEstimateServiceResult = projectEstimateServiceResults[0];
+
+                PLNSC.ProjectService.WarningMessageDTO[] errors = projectServiceFinaliseReplyDTO.warningsAndInformation;
+
+                if (errors.Length > 0)
+                {
+                    result = errors[0].message.Trim();
+                    transContext.transaction = transID;
+                    transactionService.rollback(transContext);
+                }
+                else
+                {
+                    result = "OK";
+                    transContext.transaction = transID;
+                    transactionService.commit(transContext);
+                }
+            }
+            catch (Exception ex)
+            {
+                result = ex.Message;
+            }
+            return result;
+        }
+
+        string actualEffort(string sONbr)
+        {
+            string result = string.Empty;
+            string transID = "";
+
+            try
+            {
+                ClientConversation.authenticate(userName, password);
+                TransactionService transactionService = new TransactionService()
+                {
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}TransactionService"
+                };
+                PLNSC.TransactionRef.OperationContext transContext = new PLNSC.TransactionRef.OperationContext()
+                {
+                    district = districtCode,
+                    position = positionID,
+                    maxInstances = maxInstance
+                };
+
+                transID = transactionService.begin(transContext);
+
+                ProjectService projectService = new ProjectService()
+                {
+                    Timeout = transactionService.Timeout,
+                    Url = $"{urlPrefix(dbName)}ProjectService"
+                };
+
+                PLNSC.ProjectService.OperationContext projectServiceContext = new PLNSC.ProjectService.OperationContext()
+                {
+                    district = transContext.district,
+                    position = transContext.position,
+                    maxInstances = transContext.maxInstances
+                };
+
+                ProjectServiceReadRequestDTO projectServiceReadRequestDTO = new ProjectServiceReadRequestDTO()
+                {
+                    districtCode = transContext.district,
+                    projectNo = sONbr.Trim()
+                };
+
+                ProjectServiceReadReplyDTO projectServiceReadReplyDTO = projectService.read(projectServiceContext, projectServiceReadRequestDTO);
+                PLNSC.ProjectService.WarningMessageDTO[] errorRead = projectServiceReadReplyDTO.warningsAndInformation;
+                if (errorRead.Length > 0)
+                {
+                    result = errorRead[0].message.Trim();
+                    transContext.transaction = transID;
+                    transactionService.rollback(transContext);
+                    return result;
+                }
+
+                string actStrDate = projectServiceReadReplyDTO.actualStrDate;
+
+                ProjectServiceActualsRequestDTO projectServiceActualsRequestDTO = new ProjectServiceActualsRequestDTO()
+                {
+                    districtCode = transContext.district,
+                    projectNo = sONbr.Trim(),
+                    actualStrDate = actStrDate,
+                    actualFinDate = DateTime.Now.ToString("yyyyMMdd")
+                };
+                ProjectServiceActualsReplyDTO projectServiceActualReplyDTO = projectService.actuals(projectServiceContext, projectServiceActualsRequestDTO);
+
+                PLNSC.ProjectService.WarningMessageDTO[] errors = projectServiceActualReplyDTO.warningsAndInformation;
+
+                if (errors.Length > 0)
+                {
+                    result = errors[0].message.Trim();
+                    transContext.transaction = transID;
+                    transactionService.rollback(transContext);
+                    return result;
+                }
+                else
+                {
+                    result = "OK";
+                    transContext.transaction = transID;
+                    transactionService.commit(transContext);
+                }
+            }
+            catch (Exception ex)
+            {
+                result = ex.Message;
+            }
+            return result;
+        }
+
         string createProjectEstimate(SOOrder sOOrder)
         {
             string transID = "";
@@ -284,7 +502,8 @@ namespace PX.Objects.SO
                 ClientConversation.authenticate(userName, password);
                 TransactionService transactionService = new TransactionService()
                 {
-                    Timeout = sessionTimeout
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}TransactionService"
                 };
                 PLNSC.TransactionRef.OperationContext transContext = new PLNSC.TransactionRef.OperationContext()
                 {
@@ -300,7 +519,8 @@ namespace PX.Objects.SO
 
                 ProjectEstimateService projectEstimateService = new ProjectEstimateService()
                 {
-                    Timeout = transactionService.Timeout
+                    Timeout = transactionService.Timeout,
+                    Url = $"{urlPrefix(dbName)}ProjectEstimateService"
                 };
 
                 PLNSC.ProjectEstimateRef.OperationContext projectEstimateOperationContext = new PLNSC.ProjectEstimateRef.OperationContext()
@@ -362,7 +582,8 @@ namespace PX.Objects.SO
                 ClientConversation.authenticate(userName, password);
                 TransactionService transactionService = new TransactionService()
                 {
-                    Timeout = sessionTimeout
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}TransactionService"
                 };
                 PLNSC.TransactionRef.OperationContext transContext = new PLNSC.TransactionRef.OperationContext()
                 {
@@ -389,7 +610,8 @@ namespace PX.Objects.SO
 
                 RefCodesService refCodesService = new RefCodesService()
                 {
-                    Timeout = transactionService.Timeout
+                    Timeout = transactionService.Timeout,
+                    Url = $"{urlPrefix(dbName)}RefCodesService"
                 };
 
                 RefCodesServiceModifyRequestDTO refCodesServiceModifyRequestDTO = new RefCodesServiceModifyRequestDTO()
@@ -462,7 +684,8 @@ namespace PX.Objects.SO
                 ClientConversation.authenticate(userName, password);
                 TransactionService transactionService = new TransactionService()
                 {
-                    Timeout = sessionTimeout
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}TransactionService"
                 };
                 PLNSC.TransactionRef.OperationContext transContext = new PLNSC.TransactionRef.OperationContext()
                 {
@@ -483,7 +706,8 @@ namespace PX.Objects.SO
 
                 ProjectService projectService = new ProjectService()
                 {
-                    Timeout = sessionTimeout
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}ProjectService"
                 };
 
                 ProjectServiceAuthoriseRequestDTO projectServiceAuthoriseRequestDTO = new ProjectServiceAuthoriseRequestDTO()
@@ -527,7 +751,8 @@ namespace PX.Objects.SO
                 ClientConversation.authenticate(userName, password);
                 TransactionService transactionService = new TransactionService()
                 {
-                    Timeout = sessionTimeout
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}TransactionService"
                 };
                 PLNSC.TransactionRef.OperationContext transContext = new PLNSC.TransactionRef.OperationContext()
                 {
@@ -550,7 +775,8 @@ namespace PX.Objects.SO
 
                 ProjectService projectService = new ProjectService()
                 {
-                    Timeout = sessionTimeout
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}ProjectService"
                 };
 
                 ProjectServiceActualsRequestDTO projectServiceActualsRequestDTO = new ProjectServiceActualsRequestDTO()
@@ -591,6 +817,7 @@ namespace PX.Objects.SO
             int? cogsSubId;
             int? invtAcctId;
             int? invtSubId;
+            int? cARAccountID;
 
             string cogsAcctCd = "";
             string cogsSubCd = "";
@@ -598,6 +825,7 @@ namespace PX.Objects.SO
             string invtSubCd = "";
             string custSalesAcctCD = "";
             string custSalesSubCD = "";
+            string cARAccountCD = string.Empty;
             string custCD = "";
             string transID = "";
 
@@ -608,7 +836,8 @@ namespace PX.Objects.SO
                 ClientConversation.authenticate(userName, password);
                 TransactionService transactionService = new TransactionService()
                 {
-                    Timeout = sessionTimeout
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}TransactionService"
                 };
                 PLNSC.TransactionRef.OperationContext transContext = new PLNSC.TransactionRef.OperationContext()
                 {
@@ -630,12 +859,15 @@ namespace PX.Objects.SO
 
                 customerSalesAcctId = custLocation.CSalesAcctID;
                 customerSalesSubId = custLocation.CSalesSubID;
+                cARAccountID = custLocation.CARAccountID;
 
                 Account custSalesAccount = PXSelect<Account, Where<Account.accountID, Equal<Required<Account.accountID>>>>.Select(Base, customerSalesAcctId);
+                Account custARAccount = PXSelect<Account, Where<Account.accountID, Equal<Required<Account.accountID>>>>.Select(Base, cARAccountID);
                 Sub custSalesSub = PXSelect<Sub, Where<Sub.subID, Equal<Required<Sub.subID>>>>.Select(Base, customerSalesSubId);
 
                 custSalesAcctCD = custSalesAccount.AccountCD;
                 custSalesSubCD = custSalesSub.SubCD;
+                cARAccountCD = custARAccount.AccountCD;
                 custCD = customer.AcctCD.Trim();
 
                 foreach (SOLine soLine in Base.Transactions.Select(sOOrder.OrderNbr))
@@ -688,7 +920,8 @@ namespace PX.Objects.SO
 
                     ProjectService projectService = new ProjectService()
                     {
-                        Timeout = sessionTimeout
+                        Timeout = sessionTimeout,
+                        Url = $"{urlPrefix(dbName)}ProjectService"
                     };
 
                     ProjectServiceModifyRequestDTO projectRequest = new ProjectServiceModifyRequestDTO()
@@ -699,7 +932,7 @@ namespace PX.Objects.SO
                         originatorId = originatorId,
                         raisedDate = raisedDate,
                         planFinDate = planFinishDate,
-                        accountCode = stockItemAccount,
+                        accountCode = cARAccountCD,
                         accountCodeEnabled = true
                     };
 

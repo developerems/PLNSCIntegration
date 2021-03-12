@@ -2,6 +2,7 @@ using EllipseWebServicesClient;
 using Oracle.ManagedDataAccess.Client;
 using PLNSC;
 using PLNSC.ScreenService;
+using System.Collections.Generic;
 using PX.Data;
 using PX.Objects.CR;
 using PX.Objects.GL;
@@ -10,6 +11,7 @@ using PX.Objects.PO;
 using PX.Objects.RQ;
 using System;
 using System.Linq;
+using System.Text;
 using System.Web;
 
 namespace PX.Objects.SO
@@ -17,22 +19,84 @@ namespace PX.Objects.SO
     public class SOShipmentEntry_Extension : PXGraphExtension<SOShipmentEntry>
     {
         public static string dbName = Data.Update.PXInstanceHelper.DatabaseName;
+        public string urlPrefix(string dbName)
+        {
+            string result = string.Empty;
+
+            if (dbName.Trim().Contains("DEV"))
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("TRN"))
+            {
+                result = "http://ews-elltrn.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("PRD"))
+            {
+                result = "http://ews-ellprd.ellipse.plnsc.co.id/ews/services/";
+            }
+            else
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+
+            return result;
+        }
+
+        int sessionTimeout = 3600000;
+        int maxInstance = 1;
+
+        public static string districtCode = "SC01";
+        public static string positionID = "INTPO";
+        public static string userName = "ADMIN";
+        public static string password = "P@ssw0rd";
 
         #region Event Handlers
         [PXOverride]
         public virtual void CorrectShipment(SOOrderEntry docgraph, SOShipment shiporder, Action<SOOrderEntry, SOShipment> baseCorrectShipment)
         {
+            if (shiporder.ControlQty != shiporder.ShipmentQty)
+            {
+                string errorControlQty = $"Control Quantity Must Be Equal To Shipped Quantity";
+                throw new PXException(errorControlQty);
+            }
+
             string DBName = Data.Update.PXInstanceHelper.DatabaseName;
             var shipLines = PXSelect<SOShipLine,
                 Where<SOShipLine.shipmentNbr, Equal<Required<SOShipLine.shipmentNbr>>,
                 And<SOShipLine.shipmentType, Equal<Required<SOShipLine.shipmentType>>>>>.Select(Base, shiporder.ShipmentNbr, shiporder.ShipmentType).ToList().Select(a => a.GetItem<SOShipLine>());
 
+            bool isAccountValid = validateAccount(shiporder, shipLines, out string hppAccount, out string prsdAccount, out string arpAccount, out string salesAccount, out string purchMethod);
+
+            if (!isAccountValid)
+            {
+                string errorAccount = string.Empty;
+                if (purchMethod == "ROK")
+                {
+                    errorAccount = $"HPP Account: {hppAccount}, PRSD Account: {prsdAccount}, ARP Account: {arpAccount}, SALES Account: {salesAccount}";
+                }
+                else
+                {
+                    errorAccount = $"HPP Account: {hppAccount}, PRSD Account: {prsdAccount}";
+                }
+                throw new PXException(errorAccount);
+            }
+
             foreach (SOShipLine shipLine in shipLines)
             {
                 string sONumber = shipLine.OrigOrderNbr != null ? shipLine.OrigOrderNbr.Trim() : string.Empty;
+                string pOLineNo = string.Empty;
                 int sOLineNumber = shipLine.OrigLineNbr ?? 0;
                 int inventoryID = shipLine.InventoryID ?? 0;
                 decimal shippedQty = shipLine.ShippedQty ?? 0;
+
+                SOLineSplit sOLineSplit = PXSelect<SOLineSplit, Where<SOLineSplit.orderNbr, Equal<Required<SOLineSplit.orderNbr>>,
+                    And<SOLineSplit.lineNbr, Equal<Required<SOLineSplit.lineNbr>>>>>.Select(Base, sONumber, sOLineNumber);
+
+                if (sOLineSplit != null)
+                {
+                    pOLineNo = (sOLineSplit.POLineNbr ?? 0).ToString();
+                }
 
                 string shipmentDate = (shiporder.ShipDate ?? DateTime.Now).ToString("yyyyMMdd");
                 string glCurrentPeriod = getCurrentPeriod(DBName);
@@ -43,7 +107,7 @@ namespace PX.Objects.SO
                     out int customerCode, out int customerLocID);
 
                 string inventoryCode = getInventoryInfo(inventoryID, out string invtCOGSAcct, out string invtCOGSSub, out string invtSalesAcct, out string invtSalesSub);
-                string pOLineNumber = getPOInfo(requisitionNbr, out string pONumber, out int supplierCode, out int supplierLocID);
+                string pOLineNumber = getPOInfo(requisitionNbr, pOLineNo, out string pONumber, out int supplierCode, out int supplierLocID);
                 string vendorCD = getSupplierCode(supplierCode, supplierLocID);
                 string customercd = getCustomerAccount(customerCode, customerLocID, out string custSalesAcctCD, out string custDiscAcctCD, out string custSalesSubCD);
                 string receivedValue = getReceiptValue(pONumber, pOLineNumber, DBName, out string memoAmount, out string currencyType, out string receiptAccount);
@@ -74,17 +138,48 @@ namespace PX.Objects.SO
         [PXOverride]
         public virtual void ConfirmShipment(SOOrderEntry docgraph, SOShipment shiporder, Action<SOOrderEntry, SOShipment> baseConfirmShipment)
         {
+            if (shiporder.ControlQty != shiporder.ShipmentQty)
+            {
+                string errorControlQty = $"Control Quantity Must Be Equal To Shipped Quantity";
+                throw new PXException(errorControlQty);
+            }
+
             string DBName = Data.Update.PXInstanceHelper.DatabaseName;
             var shipLines = PXSelect<SOShipLine,
                 Where<SOShipLine.shipmentNbr, Equal<Required<SOShipLine.shipmentNbr>>,
                 And<SOShipLine.shipmentType, Equal<Required<SOShipLine.shipmentType>>>>>.Select(Base, shiporder.ShipmentNbr, shiporder.ShipmentType).ToList().Select(a => a.GetItem<SOShipLine>());
 
+            bool isAccountValid = validateAccount(shiporder, shipLines, out string hppAccount, out string prsdAccount, out string arpAccount, out string salesAccount, out string purchMethod);
+
+            if (!isAccountValid)
+            {
+                string errorAccount = string.Empty;
+                if (purchMethod == "B2B")
+                {
+                    errorAccount = $"Please Check HPP Account: {hppAccount}, PRSD Account: {prsdAccount}, ARP Account: {arpAccount}, SALES Account: {salesAccount}";
+                }
+                else
+                {
+                    errorAccount = $"Please Check HPP Account: {hppAccount}, PRSD Account: {prsdAccount}";
+                }
+                throw new PXException(errorAccount);
+            }
+
             foreach (SOShipLine shipLine in shipLines)
             {
                 string sONumber = shipLine.OrigOrderNbr != null ? shipLine.OrigOrderNbr.Trim() : string.Empty;
+                string pOLineNo = string.Empty;
                 int sOLineNumber = shipLine.OrigLineNbr ?? 0;
                 int inventoryID = shipLine.InventoryID ?? 0;
                 decimal shippedQty = shipLine.ShippedQty ?? 0;
+
+                SOLineSplit sOLineSplit = PXSelect<SOLineSplit, Where<SOLineSplit.orderNbr, Equal<Required<SOLineSplit.orderNbr>>,
+                    And<SOLineSplit.lineNbr, Equal<Required<SOLineSplit.lineNbr>>>>>.Select(Base, sONumber, sOLineNumber);
+
+                if (sOLineSplit != null)
+                {
+                    pOLineNo = (sOLineSplit.POLineNbr ?? 0).ToString();
+                }
 
                 string shipmentDate = (shiporder.ShipDate ?? DateTime.Now).ToString("yyyyMMdd");
                 string glCurrentPeriod = getCurrentPeriod(DBName);
@@ -95,7 +190,7 @@ namespace PX.Objects.SO
                     out int customerCode, out int customerLocID);
 
                 string inventoryCode = getInventoryInfo(inventoryID, out string invtCOGSAcct, out string invtCOGSSub, out string invtSalesAcct, out string invtSalesSub);
-                string pOLineNumber = getPOInfo(requisitionNbr, out string pONumber, out int supplierCode, out int supplierLocID);
+                string pOLineNumber = getPOInfo(requisitionNbr, pOLineNo, out string pONumber, out int supplierCode, out int supplierLocID);
                 string vendorCD = getSupplierCode(supplierCode, supplierLocID);
                 string customercd = getCustomerAccount(customerCode, customerLocID, out string custSalesAcctCD, out string custDiscAcctCD, out string custSalesSubCD);
                 string receivedValue = getReceiptValue(pONumber, pOLineNumber, DBName, out string memoAmount, out string currencyType, out string receiptAccount);
@@ -115,13 +210,128 @@ namespace PX.Objects.SO
                 {
                     createJournalResult = createB2BJournal(shiporder, shipLine, DBName,
                         soLineSort, glCurrentPeriod, sONumber, invtCOGSAcct, invtCOGSSub, invtSalesAcct, invtSalesSub, purchaseMethod, vendorCD, pONumber,
-                        shipmentDate, custSalesSubCD, receivedValue, receiptAccount, custDiscAcctCD, strSOShipExtAmt, memoAmount, strSOShipCuryExtAmt, sOLineNumber, shippedQty,
+                        shipmentDate, custSalesAcctCD, custSalesSubCD, receivedValue, receiptAccount, custDiscAcctCD, strSOShipExtAmt, memoAmount, strSOShipCuryExtAmt, sOLineNumber, shippedQty,
                         sOCuryUnitPrice, sOUnitPrice, sOShipCuryExtAmt, sOShipExtAmt);
                 }
             }
             baseConfirmShipment(docgraph, shiporder);
         }
         #endregion
+
+        bool validateAccount(SOShipment shiporder, IEnumerable<SOShipLine> shipLines, 
+            out string hppAccount, out string prsdAccount, out string arpAccount, out string salesAccount, out string purchaseMethod)
+        {
+            bool result = false;
+            hppAccount = string.Empty;
+            prsdAccount = string.Empty;
+            arpAccount = string.Empty;
+            salesAccount = string.Empty;
+            purchaseMethod = string.Empty;
+
+            foreach (SOShipLine shipLine in shipLines)
+            {
+                string sONumber = shipLine.OrigOrderNbr != null ? shipLine.OrigOrderNbr.Trim() : string.Empty;
+                string pOLineNo = string.Empty;
+                int sOLineNumber = shipLine.OrigLineNbr ?? 0;
+                int inventoryID = shipLine.InventoryID ?? 0;
+                decimal shippedQty = shipLine.ShippedQty ?? 0;
+
+                SOLineSplit sOLineSplit = PXSelect<SOLineSplit, Where<SOLineSplit.orderNbr, Equal<Required<SOLineSplit.orderNbr>>,
+                    And<SOLineSplit.lineNbr, Equal<Required<SOLineSplit.lineNbr>>>>>.Select(Base, sONumber, sOLineNumber);
+
+                if (sOLineSplit != null)
+                {
+                    pOLineNo = (sOLineSplit.POLineNbr ?? 0).ToString();
+                }
+
+                purchaseMethod = getPurchaseMethod(sONumber, sOLineNumber, shippedQty,
+                    out decimal sOCuryUnitPrice, out decimal sOUnitPrice, out decimal sOShipCuryExtAmt, out decimal sOShipExtAmt,
+                    out string strSOShipExtAmt, out string strSOShipCuryExtAmt, out string soLineSort, out string requisitionNbr, out string sOLineCuryExtPrice, out string sOLineExtPrice,
+                    out int customerCode, out int customerLocID);
+
+                string inventoryCode = getInventoryInfo(inventoryID, out string invtCOGSAcct, out string invtCOGSSub, out string invtSalesAcct, out string invtSalesSub);
+                string pOLineNumber = getPOInfo(requisitionNbr, pOLineNo, out string pONumber, out int supplierCode, out int supplierLocID);
+                string vendorCD = getSupplierCode(supplierCode, supplierLocID);
+                string customercd = getCustomerAccount(customerCode, customerLocID, out string custSalesAcctCD, out string custDiscAcctCD, out string custSalesSubCD);
+                string receivedValue = getReceiptValue(pONumber, pOLineNumber, dbName, out string memoAmount, out string currencyType, out string receiptAccount);
+
+                hppAccount = custSalesSubCD.Trim().Substring(0, custSalesSubCD.Trim().Length - 4) + invtCOGSSub.Trim().Substring(11) + invtCOGSAcct.Trim();
+                prsdAccount = receiptAccount.Trim();
+                arpAccount = custDiscAcctCD;
+                salesAccount = custSalesSubCD.Trim().Substring(0, custSalesSubCD.Trim().Length - 4) + invtSalesSub.Trim().Substring(11) + custSalesAcctCD.Trim();
+
+                string hppAccountisValid = checkValidAccount(hppAccount);
+                string prsdAccountisValid = checkValidAccount(prsdAccount);
+                string arpAccountisValid = checkValidAccount(arpAccount);
+                string salesAccountisValid = checkValidAccount(salesAccount);
+
+                bool hppSLRequired = getSubledgerInd(hppAccount);
+                bool prsdSLRequired = getSubledgerInd(prsdAccount);
+                bool arpSLRequired = getSubledgerInd(arpAccount);
+                bool salesSLRequired = getSubledgerInd(salesAccount);
+
+                if (purchaseMethod == "ROK")
+                {
+                    if (hppSLRequired)
+                    {
+                        StringBuilder stringHppAccount = new StringBuilder(hppAccount);
+                        throw new PXException(CustomMessage.subledgerRequired, stringHppAccount);
+                    }
+
+                    if (prsdSLRequired)
+                    {
+                        StringBuilder stringPrsdAccount = new StringBuilder(prsdAccount);
+                        throw new PXException(CustomMessage.subledgerRequired, stringPrsdAccount);
+                    }
+
+                    if (hppAccountisValid == "OK" && prsdAccountisValid == "OK")
+                    {
+                        result = true;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+
+                if (purchaseMethod == "B2B")
+                {
+                    if (hppSLRequired)
+                    {
+                        StringBuilder stringHppAccount = new StringBuilder(hppAccount);
+                        throw new PXException(CustomMessage.subledgerRequired, stringHppAccount);
+                    }
+
+                    if (prsdSLRequired)
+                    {
+                        StringBuilder stringPrsdAccount = new StringBuilder(prsdAccount);
+                        throw new PXException(CustomMessage.subledgerRequired, stringPrsdAccount);
+                    }
+
+                    if (arpSLRequired)
+                    {
+                        StringBuilder stringArpAccount = new StringBuilder(arpAccount);
+                        throw new PXException(CustomMessage.subledgerRequired, stringArpAccount);
+                    }
+
+                    if (salesSLRequired)
+                    {
+                        StringBuilder stringSalesAccount = new StringBuilder(salesAccount);
+                        throw new PXException(CustomMessage.subledgerRequired, stringSalesAccount);
+                    }
+
+                    if (hppAccountisValid == "OK" && prsdAccountisValid == "OK" && arpAccountisValid == "OK" && salesAccountisValid == "OK")
+                    {
+                        result = true;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+            }
+            return result;
+        }
 
         string createROKJournal(SOShipment shiporder, SOShipLine shipLine, string DBName, 
             string sOLineSort, string glCurrentPeriod, string sONumber, string invtCOGSAcct, string invtCOGSSub, string invtSalesAcct, string invtSalesSub, string purchaseMethod,
@@ -149,7 +359,7 @@ namespace PX.Objects.SO
 
             try
             {
-                ClientConversation.authenticate("ADMIN", "");
+                ClientConversation.authenticate("ADMIN", "P@ssw0rd");
                 loggedIn = true;
             }
             catch (Exception ex)
@@ -162,15 +372,16 @@ namespace PX.Objects.SO
             {
                 try
                 {
-                    ClientConversation.authenticate("ADMIN", "");
+                    ClientConversation.authenticate(userName, password);
                     ScreenService screenService = new ScreenService()
                     {
-                        Timeout = 3600000
+                        Timeout = sessionTimeout,
+                        Url = $"{urlPrefix(dbName)}ScreenService"
                     };
                     OperationContext screenOperationContext = new OperationContext()
                     {
-                        district = "SC01",
-                        position = "INTPO",
+                        district = districtCode,
+                        position = positionID,
                         maxInstances = 1
                     };
                     screenReply = screenService.executeScreen(screenOperationContext, "MSO905");
@@ -388,6 +599,35 @@ namespace PX.Objects.SO
                             throw new PXException(errMess.Trim());
                         }
 
+                        if (screenName == "MSM004A")
+                        {
+                            ScreenNameValueDTO[] msm004A = new ScreenNameValueDTO[screenReply.screenFields.Length];
+                            for (int i = 0; i < screenReply.screenFields.Length; i++)
+                            {
+                                msm004A[i] = new ScreenNameValueDTO();
+                                msm004A[i].fieldName = screenReply.screenFields[i].fieldName;
+                                msm004A[i].value = screenReply.screenFields[i].value;
+
+                                if (screenReply.screenFields[i].fieldName == "ITEM_NUM1I")
+                                {
+                                    msm004A[i].value = "1";
+                                }
+                            }
+
+                            submitRequest.screenFields = msm004A;
+                            submitRequest.screenKey = "1"; // OK
+                            screenReply = screenService.submit(screenOperationContext, submitRequest);
+
+                            screenName = screenReply.mapName;
+                            errMess = screenReply.message;
+                            functionKey = screenReply.functionKeys.Trim();
+
+                            if (errMess.Trim() != "")
+                            {
+                                throw new PXException(errMess.Trim());
+                            }
+                        }
+
                         if (functionKey.Contains("XMIT-Confirm"))
                         {
                             ScreenNameValueDTO[] fieldsDetailFirst = new ScreenNameValueDTO[screenReply.screenFields.Length];
@@ -410,29 +650,29 @@ namespace PX.Objects.SO
                             {
                                 throw new PXException(errMess.Trim());
                             }
+                        }
 
-                            if (screenName == "MSM906A" && functionKey.Contains("XMIT-Validate"))
+                        if (screenName == "MSM906A" && functionKey.Contains("XMIT-Validate"))
+                        {
+                            ScreenNameValueDTO[] fieldsDetailSec = new ScreenNameValueDTO[screenReply.screenFields.Length];
+                            for (int i = 0; i < screenReply.screenFields.Length; i++)
                             {
-                                ScreenNameValueDTO[] fieldsDetailSec = new ScreenNameValueDTO[screenReply.screenFields.Length];
-                                for (int i = 0; i < screenReply.screenFields.Length; i++)
-                                {
-                                    fieldsDetailSec[i] = new ScreenNameValueDTO();
-                                    fieldsDetailSec[i].fieldName = screenReply.screenFields[i].fieldName;
-                                    fieldsDetailSec[i].value = screenReply.screenFields[i].value;
-                                }
+                                fieldsDetailSec[i] = new ScreenNameValueDTO();
+                                fieldsDetailSec[i].fieldName = screenReply.screenFields[i].fieldName;
+                                fieldsDetailSec[i].value = screenReply.screenFields[i].value;
+                            }
 
-                                submitRequest.screenFields = fieldsDetailSec;
-                                submitRequest.screenKey = "1"; // OK
-                                screenReply = screenService.submit(screenOperationContext, submitRequest);
+                            submitRequest.screenFields = fieldsDetailSec;
+                            submitRequest.screenKey = "1"; // OK
+                            screenReply = screenService.submit(screenOperationContext, submitRequest);
 
-                                screenName = screenReply.mapName;
-                                errMess = screenReply.message;
-                                functionKey = screenReply.functionKeys.Trim();
+                            screenName = screenReply.mapName;
+                            errMess = screenReply.message;
+                            functionKey = screenReply.functionKeys.Trim();
 
-                                if (errMess.Trim() != "")
-                                {
-                                    throw new PXException(errMess.Trim());
-                                }
+                            if (errMess.Trim() != "")
+                            {
+                                throw new PXException(errMess.Trim());
                             }
                         }
                         screenService.positionToMenu(screenOperationContext);
@@ -448,7 +688,7 @@ namespace PX.Objects.SO
 
         string createB2BJournal(SOShipment shiporder, SOShipLine shipLine, string DBName,
             string sOLineSort, string glCurrentPeriod, string sONumber, string invtCOGSAcct, string invtCOGSSub, string invtSalesAcct, string invtSalesSub, string purchaseMethod,
-            string vendorCD, string pONumber, string shipmentDate, string custSalesSubCD, string receivedValue, string receiptAccount, string custDiscAcctCD, string strSOShipExtAmt,
+            string vendorCD, string pONumber, string shipmentDate, string custSalesAcctCD, string custSalesSubCD, string receivedValue, string receiptAccount, string custDiscAcctCD, string strSOShipExtAmt,
             string memoAmount, string strSOShipCuryExtAmt, int sOLineNumber,
             decimal shippedQty, decimal sOCuryUnitPrice, decimal sOUnitPrice, decimal sOShipCuryExtAmt, decimal sOShipExtAmt)
         {
@@ -472,7 +712,7 @@ namespace PX.Objects.SO
 
             try
             {
-                ClientConversation.authenticate("ADMIN", "");
+                ClientConversation.authenticate(userName, password);
                 loggedIn = true;
             }
             catch (Exception ex)
@@ -485,15 +725,16 @@ namespace PX.Objects.SO
             {
                 try
                 {
-                    ClientConversation.authenticate("ADMIN", "");
+                    ClientConversation.authenticate(userName, password);
                     ScreenService screenService = new ScreenService()
                     {
-                        Timeout = 3600000
+                        Timeout = sessionTimeout,
+                        Url = $"{urlPrefix(dbName)}ScreenService"
                     };
                     OperationContext screenOperationContext = new OperationContext()
                     {
-                        district = "SC01",
-                        position = "INTPO",
+                        district = districtCode,
+                        position = positionID,
                         maxInstances = 1
                     };
                     screenReply = screenService.executeScreen(screenOperationContext, "MSO905");
@@ -690,7 +931,7 @@ namespace PX.Objects.SO
                                     fieldsDetail[i].value = "SC01";
                                     break;
                                 case "ACCOUNT_CODE1I4":
-                                    fieldsDetail[i].value = custSalesSubCD.Trim().Substring(0, custSalesSubCD.Trim().Length - 4) + invtSalesSub.Trim().Substring(11) + invtSalesAcct.Trim();
+                                    fieldsDetail[i].value = custSalesSubCD.Trim().Substring(0, custSalesSubCD.Trim().Length - 4) + invtSalesSub.Trim().Substring(11) + custSalesAcctCD.Trim();
                                     break;
                                 case "TRAN_AMOUNT1I4":
                                     fieldsDetail[i].value = $"-{strSOShipExtAmt}";
@@ -726,6 +967,35 @@ namespace PX.Objects.SO
                             throw new PXException($"{errMess.Trim()}-{screenReply.currentCursorFieldName}-{errorValue.Trim()}");
                         }
 
+                        if (screenName == "MSM004A")
+                        {
+                            ScreenNameValueDTO[] msm004A = new ScreenNameValueDTO[screenReply.screenFields.Length];
+                            for (int i = 0; i < screenReply.screenFields.Length; i++)
+                            {
+                                msm004A[i] = new ScreenNameValueDTO();
+                                msm004A[i].fieldName = screenReply.screenFields[i].fieldName;
+                                msm004A[i].value = screenReply.screenFields[i].value;
+
+                                if (screenReply.screenFields[i].fieldName == "ITEM_NUM1I")
+                                {
+                                    msm004A[i].value = "1";
+                                }
+                            }
+
+                            submitRequest.screenFields = msm004A;
+                            submitRequest.screenKey = "1"; // OK
+                            screenReply = screenService.submit(screenOperationContext, submitRequest);
+
+                            screenName = screenReply.mapName;
+                            errMess = screenReply.message;
+                            functionKey = screenReply.functionKeys.Trim();
+
+                            if (errMess.Trim() != "")
+                            {
+                                throw new PXException(errMess.Trim());
+                            }
+                        }
+
                         if (functionKey.Contains("XMIT-Confirm"))
                         {
                             ScreenNameValueDTO[] fieldsDetailFirst = new ScreenNameValueDTO[screenReply.screenFields.Length];
@@ -748,29 +1018,29 @@ namespace PX.Objects.SO
                             {
                                 throw new PXException(errMess.Trim());
                             }
+                        }
 
-                            if (screenName == "MSM906A" && functionKey.Contains("XMIT-Validate"))
+                        if (screenName == "MSM906A" && functionKey.Contains("XMIT-Validate"))
+                        {
+                            ScreenNameValueDTO[] fieldsDetailSec = new ScreenNameValueDTO[screenReply.screenFields.Length];
+                            for (int i = 0; i < screenReply.screenFields.Length; i++)
                             {
-                                ScreenNameValueDTO[] fieldsDetailSec = new ScreenNameValueDTO[screenReply.screenFields.Length];
-                                for (int i = 0; i < screenReply.screenFields.Length; i++)
-                                {
-                                    fieldsDetailSec[i] = new ScreenNameValueDTO();
-                                    fieldsDetailSec[i].fieldName = screenReply.screenFields[i].fieldName;
-                                    fieldsDetailSec[i].value = screenReply.screenFields[i].value;
-                                }
+                                fieldsDetailSec[i] = new ScreenNameValueDTO();
+                                fieldsDetailSec[i].fieldName = screenReply.screenFields[i].fieldName;
+                                fieldsDetailSec[i].value = screenReply.screenFields[i].value;
+                            }
 
-                                submitRequest.screenFields = fieldsDetailSec;
-                                submitRequest.screenKey = "1"; // OK
-                                screenReply = screenService.submit(screenOperationContext, submitRequest);
+                            submitRequest.screenFields = fieldsDetailSec;
+                            submitRequest.screenKey = "1"; // OK
+                            screenReply = screenService.submit(screenOperationContext, submitRequest);
 
-                                screenName = screenReply.mapName;
-                                errMess = screenReply.message;
-                                functionKey = screenReply.functionKeys.Trim();
+                            screenName = screenReply.mapName;
+                            errMess = screenReply.message;
+                            functionKey = screenReply.functionKeys.Trim();
 
-                                if (errMess.Trim() != "")
-                                {
-                                    throw new PXException(errMess.Trim());
-                                }
+                            if (errMess.Trim() != "")
+                            {
+                                throw new PXException(errMess.Trim());
                             }
                         }
                         screenService.positionToMenu(screenOperationContext);
@@ -810,7 +1080,7 @@ namespace PX.Objects.SO
 
             try
             {
-                ClientConversation.authenticate("ADMIN", "");
+                ClientConversation.authenticate(userName, password);
                 loggedIn = true;
             }
             catch (Exception ex)
@@ -823,15 +1093,16 @@ namespace PX.Objects.SO
             {
                 try
                 {
-                    ClientConversation.authenticate("ADMIN", "");
+                    ClientConversation.authenticate(userName, password);
                     ScreenService screenService = new ScreenService()
                     {
-                        Timeout = 3600000
+                        Timeout = sessionTimeout,
+                        Url = $"{urlPrefix(dbName)}ScreenService"
                     };
                     OperationContext screenOperationContext = new OperationContext()
                     {
-                        district = "SC01",
-                        position = "INTPO",
+                        district = districtCode,
+                        position = positionID,
                         maxInstances = 1
                     };
                     screenReply = screenService.executeScreen(screenOperationContext, "MSO905");
@@ -846,7 +1117,7 @@ namespace PX.Objects.SO
                     string foreignInd = curyID == "IDR" ? string.Empty : "Y";
                     string dOLine = Right($"000{sOLineSort}", 3);
 
-                    string manJnlNbr = $"J{shipLine.ShipmentNbr.Trim()}{sOLineSort}";
+                    string manJnlNbr = $"J{shipLine.ShipmentNbr.Trim()}{sOLineSort}R";
                     string currentManjnlVchr = getExistingJournal(manJnlNbr);
 
                     bool proceed = false;
@@ -856,7 +1127,7 @@ namespace PX.Objects.SO
                         do
                         {
                             a++;
-                            manJnlNbr = $"J{shipLine.ShipmentNbr.Trim()}{sOLineSort}-{a.ToString()}";
+                            manJnlNbr = $"J{shipLine.ShipmentNbr.Trim()}{sOLineSort}R{a.ToString()}";
                             currentManjnlVchr = getExistingJournal(manJnlNbr);
                             if (currentManjnlVchr == string.Empty)
                             {
@@ -1049,6 +1320,35 @@ namespace PX.Objects.SO
                             throw new PXException(errMess.Trim());
                         }
 
+                        if (screenName == "MSM004A")
+                        {
+                            ScreenNameValueDTO[] msm004A = new ScreenNameValueDTO[screenReply.screenFields.Length];
+                            for (int i = 0; i < screenReply.screenFields.Length; i++)
+                            {
+                                msm004A[i] = new ScreenNameValueDTO();
+                                msm004A[i].fieldName = screenReply.screenFields[i].fieldName;
+                                msm004A[i].value = screenReply.screenFields[i].value;
+
+                                if (screenReply.screenFields[i].fieldName == "ITEM_NUM1I")
+                                {
+                                    msm004A[i].value = "1";
+                                }
+                            }
+
+                            submitRequest.screenFields = msm004A;
+                            submitRequest.screenKey = "1"; // OK
+                            screenReply = screenService.submit(screenOperationContext, submitRequest);
+
+                            screenName = screenReply.mapName;
+                            errMess = screenReply.message;
+                            functionKey = screenReply.functionKeys.Trim();
+
+                            if (errMess.Trim() != "")
+                            {
+                                throw new PXException(errMess.Trim());
+                            }
+                        }
+
                         if (functionKey.Contains("XMIT-Confirm"))
                         {
                             ScreenNameValueDTO[] fieldsDetailFirst = new ScreenNameValueDTO[screenReply.screenFields.Length];
@@ -1071,29 +1371,29 @@ namespace PX.Objects.SO
                             {
                                 throw new PXException(errMess.Trim());
                             }
+                        }
 
-                            if (screenName == "MSM906A" && functionKey.Contains("XMIT-Validate"))
+                        if (screenName == "MSM906A" && functionKey.Contains("XMIT-Validate"))
+                        {
+                            ScreenNameValueDTO[] fieldsDetailSec = new ScreenNameValueDTO[screenReply.screenFields.Length];
+                            for (int i = 0; i < screenReply.screenFields.Length; i++)
                             {
-                                ScreenNameValueDTO[] fieldsDetailSec = new ScreenNameValueDTO[screenReply.screenFields.Length];
-                                for (int i = 0; i < screenReply.screenFields.Length; i++)
-                                {
-                                    fieldsDetailSec[i] = new ScreenNameValueDTO();
-                                    fieldsDetailSec[i].fieldName = screenReply.screenFields[i].fieldName;
-                                    fieldsDetailSec[i].value = screenReply.screenFields[i].value;
-                                }
+                                fieldsDetailSec[i] = new ScreenNameValueDTO();
+                                fieldsDetailSec[i].fieldName = screenReply.screenFields[i].fieldName;
+                                fieldsDetailSec[i].value = screenReply.screenFields[i].value;
+                            }
 
-                                submitRequest.screenFields = fieldsDetailSec;
-                                submitRequest.screenKey = "1"; // OK
-                                screenReply = screenService.submit(screenOperationContext, submitRequest);
+                            submitRequest.screenFields = fieldsDetailSec;
+                            submitRequest.screenKey = "1"; // OK
+                            screenReply = screenService.submit(screenOperationContext, submitRequest);
 
-                                screenName = screenReply.mapName;
-                                errMess = screenReply.message;
-                                functionKey = screenReply.functionKeys.Trim();
+                            screenName = screenReply.mapName;
+                            errMess = screenReply.message;
+                            functionKey = screenReply.functionKeys.Trim();
 
-                                if (errMess.Trim() != "")
-                                {
-                                    throw new PXException(errMess.Trim());
-                                }
+                            if (errMess.Trim() != "")
+                            {
+                                throw new PXException(errMess.Trim());
                             }
                         }
                         screenService.positionToMenu(screenOperationContext);
@@ -1133,7 +1433,7 @@ namespace PX.Objects.SO
 
             try
             {
-                ClientConversation.authenticate("ADMIN", "");
+                ClientConversation.authenticate(userName, password);
                 loggedIn = true;
             }
             catch (Exception ex)
@@ -1146,15 +1446,16 @@ namespace PX.Objects.SO
             {
                 try
                 {
-                    ClientConversation.authenticate("ADMIN", "");
+                    ClientConversation.authenticate(userName, password);
                     ScreenService screenService = new ScreenService()
                     {
-                        Timeout = 3600000
+                        Timeout = sessionTimeout,
+                        Url = $"{urlPrefix(dbName)}ScreenService"
                     };
                     OperationContext screenOperationContext = new OperationContext()
                     {
-                        district = "SC01",
-                        position = "INTPO",
+                        district = districtCode,
+                        position = positionID,
                         maxInstances = 1
                     };
                     screenReply = screenService.executeScreen(screenOperationContext, "MSO905");
@@ -1164,7 +1465,6 @@ namespace PX.Objects.SO
                     {
                         throw new PXException(CustomMessage.NotMSM905A);
                     }
-
 
                     string curyID = shiporder.CuryID != null ? shiporder.CuryID.Trim() : "IDR";
                     string foreignInd = curyID == "IDR" ? string.Empty : "Y";
@@ -1377,6 +1677,35 @@ namespace PX.Objects.SO
                             throw new PXException(errMess.Trim());
                         }
 
+                        if (screenName == "MSM004A")
+                        {
+                            ScreenNameValueDTO[] msm004A = new ScreenNameValueDTO[screenReply.screenFields.Length];
+                            for (int i = 0; i < screenReply.screenFields.Length; i++)
+                            {
+                                msm004A[i] = new ScreenNameValueDTO();
+                                msm004A[i].fieldName = screenReply.screenFields[i].fieldName;
+                                msm004A[i].value = screenReply.screenFields[i].value;
+
+                                if (screenReply.screenFields[i].fieldName == "ITEM_NUM1I")
+                                {
+                                    msm004A[i].value = "1";
+                                }
+                            }
+
+                            submitRequest.screenFields = msm004A;
+                            submitRequest.screenKey = "1"; // OK
+                            screenReply = screenService.submit(screenOperationContext, submitRequest);
+
+                            screenName = screenReply.mapName;
+                            errMess = screenReply.message;
+                            functionKey = screenReply.functionKeys.Trim();
+
+                            if (errMess.Trim() != "")
+                            {
+                                throw new PXException(errMess.Trim());
+                            }
+                        }
+
                         if (functionKey.Contains("XMIT-Confirm"))
                         {
                             ScreenNameValueDTO[] fieldsDetailFirst = new ScreenNameValueDTO[screenReply.screenFields.Length];
@@ -1399,29 +1728,29 @@ namespace PX.Objects.SO
                             {
                                 throw new PXException(errMess.Trim());
                             }
+                        }
 
-                            if (screenName == "MSM906A" && functionKey.Contains("XMIT-Validate"))
+                        if (screenName == "MSM906A" && functionKey.Contains("XMIT-Validate"))
+                        {
+                            ScreenNameValueDTO[] fieldsDetailSec = new ScreenNameValueDTO[screenReply.screenFields.Length];
+                            for (int i = 0; i < screenReply.screenFields.Length; i++)
                             {
-                                ScreenNameValueDTO[] fieldsDetailSec = new ScreenNameValueDTO[screenReply.screenFields.Length];
-                                for (int i = 0; i < screenReply.screenFields.Length; i++)
-                                {
-                                    fieldsDetailSec[i] = new ScreenNameValueDTO();
-                                    fieldsDetailSec[i].fieldName = screenReply.screenFields[i].fieldName;
-                                    fieldsDetailSec[i].value = screenReply.screenFields[i].value;
-                                }
+                                fieldsDetailSec[i] = new ScreenNameValueDTO();
+                                fieldsDetailSec[i].fieldName = screenReply.screenFields[i].fieldName;
+                                fieldsDetailSec[i].value = screenReply.screenFields[i].value;
+                            }
 
-                                submitRequest.screenFields = fieldsDetailSec;
-                                submitRequest.screenKey = "1"; // OK
-                                screenReply = screenService.submit(screenOperationContext, submitRequest);
+                            submitRequest.screenFields = fieldsDetailSec;
+                            submitRequest.screenKey = "1"; // OK
+                            screenReply = screenService.submit(screenOperationContext, submitRequest);
 
-                                screenName = screenReply.mapName;
-                                errMess = screenReply.message;
-                                functionKey = screenReply.functionKeys.Trim();
+                            screenName = screenReply.mapName;
+                            errMess = screenReply.message;
+                            functionKey = screenReply.functionKeys.Trim();
 
-                                if (errMess.Trim() != "")
-                                {
-                                    throw new PXException(errMess.Trim());
-                                }
+                            if (errMess.Trim() != "")
+                            {
+                                throw new PXException(errMess.Trim());
                             }
                         }
                         screenService.positionToMenu(screenOperationContext);
@@ -1449,7 +1778,7 @@ namespace PX.Objects.SO
             string testdbNameGlobal = dbName;
             string query = "select * from msf000_cp where dstrct_code = 'SC01' and control_rec_no = '0010'";
 
-            string oraDB = DBName.Trim().Contains("PRD") ? DBConnection.oraDBPrd : DBConnection.oraDBDev;
+            string oraDB = DBName.Trim().Contains("PRD") ? DBConnection.oraDBPrd : DBName.Trim().Contains("TRN") ? DBConnection.oraDBTrn : DBConnection.oraDBDev;
 
             OracleConnection con = new OracleConnection(oraDB);
             OracleCommand cmd = new OracleCommand();
@@ -1483,7 +1812,7 @@ namespace PX.Objects.SO
             string tranAmount = string.Empty;
             string tranGroupKey = string.Empty;
 
-            string oraDB = DBName.Trim().Contains("PRD") ? DBConnection.oraDBPrd : DBConnection.oraDBDev;
+            string oraDB = DBName.Trim().Contains("PRD") ? DBConnection.oraDBPrd : DBName.Trim().Contains("TRN") ? DBConnection.oraDBTrn : DBConnection.oraDBDev;
 
             memoAmount = "0";
             currencyType = "IDR";
@@ -1547,7 +1876,7 @@ namespace PX.Objects.SO
             string testDBNameLocale = DBName;
             string testdbNameGlobal = dbName;
 
-            string oraDB = DBName.Trim().Contains("PRD") ? DBConnection.oraDBPrd : DBConnection.oraDBDev;
+            string oraDB = DBName.Trim().Contains("PRD") ? DBConnection.oraDBPrd : DBName.Trim().Contains("TRN") ? DBConnection.oraDBTrn : DBConnection.oraDBDev;
 
             OracleConnection con = new OracleConnection(oraDB);
             OracleCommand cmd = new OracleCommand();
@@ -1569,7 +1898,7 @@ namespace PX.Objects.SO
         {
             string result = string.Empty;
 
-            string oraDB = dbName.Trim().Contains("PRD") ? DBConnection.oraDBPrd : DBConnection.oraDBDev;
+            string oraDB = dbName.Trim().Contains("PRD") ? DBConnection.oraDBPrd : dbName.Trim().Contains("TRN") ? DBConnection.oraDBTrn : DBConnection.oraDBDev;
 
             try
             {
@@ -1601,6 +1930,82 @@ namespace PX.Objects.SO
             return result;
         }
 
+        public string checkValidAccount(string accountCode)
+        {
+            string result = string.Empty;
+
+            string oraDB = dbName.Trim().Contains("PRD") ? DBConnection.oraDBPrd : dbName.Trim().Contains("TRN") ? DBConnection.oraDBTrn : DBConnection.oraDBDev;
+
+            try
+            {
+                string query = $"select account_code from msf96Y where dstrct_code = 'SC01' and account_code = '{accountCode}'";
+                OracleConnection con = new OracleConnection(oraDB);
+                OracleCommand cmd = new OracleCommand();
+                cmd.CommandText = query;
+                cmd.Connection = con;
+                con.Open();
+                OracleDataReader dr = cmd.ExecuteReader();
+                if (dr.HasRows)
+                {
+                    result = "OK";
+                }
+                else
+                {
+                    result = string.Empty;
+                }
+                con.Close();
+            }
+            catch (Exception ex)
+            {
+                result = ex.Message.Trim();
+            }
+
+            return result;
+        }
+
+        public bool getSubledgerInd(string accountCode)
+        {
+            bool result = false;
+
+            string oraDB = dbName.Trim().Contains("PRD") ? DBConnection.oraDBPrd : dbName.Trim().Contains("TRN") ? DBConnection.oraDBTrn : DBConnection.oraDBDev;
+            string subledgerInd = string.Empty;
+
+            try
+            {
+                string query = $"select * from msf966 where account_code = '{accountCode}' and dstrct_code = 'SC01'";
+                OracleConnection con = new OracleConnection(oraDB);
+                OracleCommand cmd = new OracleCommand();
+                cmd.CommandText = query;
+                cmd.Connection = con;
+                con.Open();
+                OracleDataReader dr = cmd.ExecuteReader();
+                if (dr.HasRows)
+                {
+                    while (dr.Read())
+                    {
+                        subledgerInd = dr["SUBLEDGER_IND"].ToString().Trim();
+                    }
+                }
+                con.Close();
+
+                if (subledgerInd != "M")
+                {
+                    result = false;
+                }
+                else
+                {
+                    result = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                //throw new PXException(ex.Message);
+                result = false;
+            }
+
+            return result;
+        }
+
         public string getPurchaseMethod(string sONumber, int sOLineNumber, decimal shippedQty, 
             out decimal sOCuryUnitPrice, out decimal sOUnitPrice, out decimal sOShipCuryExtAmt, out decimal sOShipExtAmt, 
             out string strSOShipExtAmt, out string strSOShipCuryExtAmt, out string soLineSort, out string requisitionNbr, out string sOLineCuryExtPrice, out string sOLineExtPrice,
@@ -1614,7 +2019,7 @@ namespace PX.Objects.SO
             SOOrderExt sOOrderExt = sOOrder.GetExtension<SOOrderExt>();
 
             string purchaseMethod = sOOrderExt.UsrPurchMethod == 0 ? "B2B" : sOOrderExt.UsrPurchMethod == 1 ? "ROK" : "GA";
-            result =purchaseMethod;
+            result = purchaseMethod;
 
             SOLine sOLine = PXSelect<SOLine,
                 Where<SOLine.orderNbr, Equal<Required<SOLine.orderNbr>>,
@@ -1669,7 +2074,7 @@ namespace PX.Objects.SO
             return result;
         }
 
-        public string getPOInfo(string requisitionNbr, out string pONumber, out int supplierCode, out int supplierLocID)
+        public string getPOInfo(string requisitionNbr, string pOLineNo, out string pONumber, out int supplierCode, out int supplierLocID)
         {
             string result = string.Empty;
 
@@ -1685,7 +2090,8 @@ namespace PX.Objects.SO
 
             POLine pOline = PXSelect<POLine,
                 Where<POLine.orderNbr, Equal<Required<POLine.orderNbr>>,
-                And<POLine.orderType, Equal<POOrderType.regularOrder>>>>.Select(Base, pOOrder.OrderNbr);
+                And<POLine.lineNbr, Equal<Required<POLine.lineNbr>>,
+                And<POLine.orderType, Equal<POOrderType.regularOrder>>>>>.Select(Base, pOOrder.OrderNbr, pOLineNo);
 
             string pOLineNbr = Right($"000{(pOline.SortOrder ?? 0).ToString()}", 3);
             result = pOLineNbr;

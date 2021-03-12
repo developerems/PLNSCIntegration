@@ -15,6 +15,39 @@ namespace PX.Objects.PO
 {
     public class POOrderEntry_Extension : PXGraphExtension<POOrderEntry>
     {
+        public static string dbName = Data.Update.PXInstanceHelper.DatabaseName;
+        public string urlPrefix(string dbName)
+        {
+            string result = string.Empty;
+
+            if (dbName.Trim().Contains("DEV"))
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("TRN"))
+            {
+                result = "http://ews-elltrn.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("PRD"))
+            {
+                result = "http://ews-ellprd.ellipse.plnsc.co.id/ews/services/";
+            }
+            else
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+
+            return result;
+        }
+
+        int sessionTimeout = 3600000;
+        int maxInstance = 1;
+
+        public static string districtCode = "SC01";
+        public static string positionID = "INTPO";
+        public static string userName = "ADMIN";
+        public static string password = "P@ssw0rd";
+
         #region Event Handlers
         [PXDBString(40, IsUnicode = true)]
         [PXUIField(DisplayName = "Description", Visibility = PXUIVisibility.SelectorVisible)]
@@ -73,21 +106,22 @@ namespace PX.Objects.PO
 
             PLNSC.ScreenService.OperationContext screenContext = new PLNSC.ScreenService.OperationContext()
             {
-                district = "SC01",
-                position = "INTPO",
+                district = districtCode,
+                position = positionID,
                 maxInstances = 1
             };
 
             ScreenService screenService = new ScreenService()
             {
-                Timeout = 3600000
+                Timeout = sessionTimeout,
+                Url = $"{urlPrefix(dbName)}ScreenService"
             };
             ScreenDTO screenReply = new ScreenDTO();
             ScreenSubmitRequestDTO submitRequest = new ScreenSubmitRequestDTO();
 
             try
             {
-                ClientConversation.authenticate("ADMIN", "");
+                ClientConversation.authenticate(userName, password);
                 loggedIn = true;
             }
             catch (Exception ex)
@@ -100,7 +134,7 @@ namespace PX.Objects.PO
             {
                 try
                 {
-                    ClientConversation.authenticate("ADMIN", "");
+                    ClientConversation.authenticate(userName, password);
                     screenReply = screenService.executeScreen(screenContext, "MSO220");
                     screenName = screenReply.mapName;
 
@@ -164,6 +198,7 @@ namespace PX.Objects.PO
             int purchaseMethod = rQRequisition != null ? rQRequisitionExt.UsrPurchMethod ?? 2 : 2;
             string nonCoreDO = rQRequisition != null ? rQRequisitionExt.UsrDONbr != null ? rQRequisitionExt.UsrDONbr.Trim() : string.Empty : string.Empty;
             string modifyPRResult = string.Empty;
+
             if (purchaseMethod != 2)
             {
                 modifyPRResult = modifyPOCostAlloc(pOOrder, pOLine, purchaseMethod, nonCoreDO);
@@ -179,7 +214,8 @@ namespace PX.Objects.PO
 
             ScreenService screenService = new ScreenService()
             {
-                Timeout = 3600000
+                Timeout = sessionTimeout,
+                Url = $"{urlPrefix(dbName)}ScreenService"
             };
             ScreenDTO screenReply = new ScreenDTO();
             ScreenSubmitRequestDTO submitRequest = new ScreenSubmitRequestDTO();
@@ -192,7 +228,7 @@ namespace PX.Objects.PO
 
             try
             {
-                ClientConversation.authenticate("ADMIN", "");
+                ClientConversation.authenticate(userName, password);
                 loggedIn = true;
             }
             catch (Exception ex)
@@ -306,7 +342,8 @@ namespace PX.Objects.PO
 
             ScreenService screenService = new ScreenService()
             {
-                Timeout = 3600000
+                Timeout = sessionTimeout,
+                Url = $"{urlPrefix(dbName)}ScreenService"
             };
             ScreenDTO screenReply = new ScreenDTO();
             ScreenSubmitRequestDTO submitRequest = new ScreenSubmitRequestDTO();
@@ -319,7 +356,7 @@ namespace PX.Objects.PO
 
             try
             {
-                ClientConversation.authenticate("ADMIN", "");
+                ClientConversation.authenticate(userName, password);
                 loggedIn = true;
             }
             catch (Exception ex)
@@ -447,7 +484,12 @@ namespace PX.Objects.PO
             string result = "";
             string projectNo = "";
 
-            if (purchaseMethod == 0)
+            if (nonCoreDO != string.Empty)
+            {
+
+                projectNo = nonCoreDO;
+            }
+            else
             {
                 SOLineSplit sOLineSplit = PXSelect<SOLineSplit, Where<SOLineSplit.pONbr, Equal<Required<SOLineSplit.pONbr>>>>.Select(Base, pOOrder.OrderNbr);
 
@@ -455,10 +497,26 @@ namespace PX.Objects.PO
                 {
                     projectNo = sOLineSplit.OrderNbr.Trim();
                 }
-            }
-            else
-            {
-                projectNo = nonCoreDO;
+                else
+                {
+                    RQRequisitionOrder rQRequisitionOrder = PXSelect<RQRequisitionOrder, 
+                        Where<RQRequisitionOrder.orderNbr, Equal<Required<RQRequisitionOrder.orderNbr>>,
+                        And<RQRequisitionOrder.orderCategory, Equal<RQOrderCategory.po>>>>.Select(Base, pOOrder.OrderNbr);
+
+                    if (rQRequisitionOrder != null)
+                    {
+                        string reqNbr = rQRequisitionOrder.ReqNbr;
+                        RQRequisitionOrder poReq = PXSelect<RQRequisitionOrder,
+                        Where<RQRequisitionOrder.reqNbr, Equal<Required<RQRequisitionOrder.reqNbr>>,
+                        And<RQRequisitionOrder.orderCategory, Equal<RQOrderCategory.so>,
+                        And<RQRequisitionOrder.orderType, Equal<SOOrderTypeConstants.salesOrder>>>>>.Select(Base, reqNbr);
+
+                        if (poReq != null)
+                        {
+                            projectNo = poReq.OrderNbr.Trim();
+                        }
+                    }
+                }
             }
            
 
@@ -471,7 +529,8 @@ namespace PX.Objects.PO
 
             ScreenService screenService = new ScreenService()
             {
-                Timeout = 3600000
+                Timeout = sessionTimeout,
+                Url = $"{urlPrefix(dbName)}ScreenService"
             };
             ScreenDTO screenReply = new ScreenDTO();
             ScreenSubmitRequestDTO submitRequest = new ScreenSubmitRequestDTO();
@@ -484,7 +543,7 @@ namespace PX.Objects.PO
 
             try
             {
-                ClientConversation.authenticate("ADMIN", "");
+                ClientConversation.authenticate(userName, password);
                 loggedIn = true;
             }
             catch (Exception ex)

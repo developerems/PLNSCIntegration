@@ -14,16 +14,42 @@ namespace PX.Objects.PO
 {
     public class POReceiptEntry_Extension : PXGraphExtension<POReceiptEntry>
     {
+        public static string dbName = Data.Update.PXInstanceHelper.DatabaseName;
+        public string urlPrefix(string dbName)
+        {
+            string result = string.Empty;
+
+            if (dbName.Trim().Contains("DEV"))
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("TRN"))
+            {
+                result = "http://ews-elltrn.ellipse.plnsc.co.id/ews/services/";
+            }
+            else if (dbName.Trim().Contains("PRD"))
+            {
+                result = "http://ews-ellprd.ellipse.plnsc.co.id/ews/services/";
+            }
+            else
+            {
+                result = "http://ews-elldev.ellipse.plnsc.co.id/ews/services/";
+            }
+
+            return result;
+        }
+
         int sessionTimeout = 3600000;
         int maxInstance = 1;
 
-        string userName = "ADMIN";
-        string passWord = "";
-        string districtCode = "SC01";
-        string positionID = "INTPO";
-        string errorMsg = "";
-        string screenName = "";
-        string integrationResult = "";
+        public static string districtCode = "SC01";
+        public static string positionID = "INTPO";
+        public static string userName = "ADMIN";
+        public static string password = "P@ssw0rd";
+
+        string errorMsg = string.Empty;
+        string screenName = string.Empty;
+        string integrationResult = string.Empty;
 
         bool loggedIn = false;
 
@@ -122,11 +148,12 @@ namespace PX.Objects.PO
 
             try
             {
-                ClientConversation.authenticate(userName, passWord);
+                ClientConversation.authenticate(userName, password);
 
                 TransactionService transactionService = new TransactionService()
                 {
-                    Timeout = sessionTimeout
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}TransactionService"
                 };
 
                 PLNSC.TransactionRef.OperationContext transContext = new PLNSC.TransactionRef.OperationContext()
@@ -140,12 +167,14 @@ namespace PX.Objects.PO
 
                 ReceiptDocumentService receipt = new ReceiptDocumentService()
                 {
-                    Timeout = 3600000
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}ReceiptDocumentService"
                 };
 
                 PLNSC.ReceiptPurchaseOrderItemRef.ReceiptPurchaseOrderItemService receiptPurchaseOrderItemService = new PLNSC.ReceiptPurchaseOrderItemRef.ReceiptPurchaseOrderItemService()
                 {
-                    Timeout = 3600000
+                    Timeout = sessionTimeout,
+                    Url = $"{urlPrefix(dbName)}ReceiptPurchaseOrderItemService"
                 };
 
                 PLNSC.ReceiptPurchaseOrderItemRef.OperationContext receiptPOItemContext = new PLNSC.ReceiptPurchaseOrderItemRef.OperationContext()
@@ -323,14 +352,15 @@ namespace PX.Objects.PO
 
             PLNSC.ScreenService.OperationContext SSContextClass = new PLNSC.ScreenService.OperationContext()
             {
-                district = "SC01",
-                position = "INTPO",
-                maxInstances = 1
+                district = districtCode,
+                position = positionID,
+                maxInstances = maxInstance
             };
 
             ScreenService screenService = new ScreenService()
             {
-                Timeout = 3600000
+                Timeout = sessionTimeout,
+                Url = $"{urlPrefix(dbName)}ScreenService"
             };
 
             ScreenDTO screenReply = new ScreenDTO();
@@ -338,9 +368,7 @@ namespace PX.Objects.PO
 
             try
             {
-                screenService.Timeout = 3600000;
-
-                ClientConversation.authenticate("ADMIN", "");
+                ClientConversation.authenticate(userName, password);
 
                 screenReply = screenService.executeScreen(SSContextClass, "MSO155");
                 screenName = screenReply.mapName;
@@ -456,10 +484,11 @@ namespace PX.Objects.PO
             {
                 foreach (POReceiptLine pOReceiptLine in receiptLines)
                 {
-                    ClientConversation.authenticate(userName, passWord);
+                    ClientConversation.authenticate(userName, password);
                     TransactionService transactionService = new TransactionService()
                     {
-                        Timeout = sessionTimeout
+                        Timeout = sessionTimeout,
+                        Url = $"{urlPrefix(dbName)}TransactionService"
                     };
 
                     PLNSC.TransactionRef.OperationContext transContext = new PLNSC.TransactionRef.OperationContext()
@@ -473,7 +502,8 @@ namespace PX.Objects.PO
 
                     PurchaseOrderReceiptService purchaseOrderReceiptService = new PurchaseOrderReceiptService()
                     {
-                        Timeout = sessionTimeout
+                        Timeout = sessionTimeout,
+                        Url = $"{urlPrefix(dbName)}PurchaseOrderReceiptService"
                     };
 
                     PLNSC.POReceiptRef.OperationContext cancelPOContext = new PLNSC.POReceiptRef.OperationContext()
@@ -486,7 +516,7 @@ namespace PX.Objects.PO
                         transaction = transID
                     };
 
-                    string pOLineNbr = pOReceiptLine.POLineNbr.ToString() ?? " ";
+                    string pOLineNbr = pOReceiptLine.POLineNbr.ToString() ?? string.Empty;
 
                     PurchaseOrderReceiptSearchParam searchParam = new PurchaseOrderReceiptSearchParam()
                     {
@@ -570,14 +600,15 @@ namespace PX.Objects.PO
 
             PLNSC.ScreenService.OperationContext SSContextClass = new PLNSC.ScreenService.OperationContext()
             {
-                district = "SC01",
-                position = "INTPO",
-                maxInstances = 1
+                district = districtCode,
+                position = positionID,
+                maxInstances = maxInstance
             };
 
             ScreenService screenService = new ScreenService()
             {
-                Timeout = 3600000
+                Timeout = sessionTimeout,
+                Url = $"{urlPrefix(dbName)}ScreenService"
             };
 
             ScreenDTO screenReply = new ScreenDTO();
@@ -585,9 +616,7 @@ namespace PX.Objects.PO
 
             try
             {
-                screenService.Timeout = 3600000;
-
-                ClientConversation.authenticate("ADMIN", "");
+                ClientConversation.authenticate(userName, password);
 
                 screenReply = screenService.executeScreen(SSContextClass, "MSO155");
                 screenName = screenReply.mapName;
